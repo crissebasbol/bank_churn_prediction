@@ -1,35 +1,8 @@
-"""Carga, validación y partición de los datos."""
-
-from __future__ import annotations
+"""Chequeos de calidad y tablas descriptivas de la base."""
 
 import pandas as pd
-from sklearn.model_selection import train_test_split
 
 from src import config as cfg
-
-
-def load_raw(path=cfg.DATA_PATH) -> pd.DataFrame:
-    """Lee el archivo original sin transformaciones."""
-    return pd.read_excel(path)
-
-
-def prepare_base(df: pd.DataFrame) -> pd.DataFrame:
-    """Tipado básico y creación del target binario (1 = churn).
-
-    No elimina ni imputa nada: las decisiones de preprocesamiento
-    se toman en `features.py` dentro de pipelines.
-    """
-    out = df.copy()
-    out[cfg.TARGET] = (out[cfg.TARGET_RAW] == cfg.POSITIVE_LABEL).astype(int)
-    out = out.drop(columns=[cfg.TARGET_RAW])
-    for col in cfg.CATEGORICAL_COLS:
-        out[col] = out[col].astype("category")
-    return out.set_index(cfg.ID_COL)
-
-
-def load_data(path=cfg.DATA_PATH) -> pd.DataFrame:
-    """Carga los datos listos para EDA y modelado."""
-    return prepare_base(load_raw(path))
 
 
 def data_dictionary(df_raw: pd.DataFrame) -> pd.DataFrame:
@@ -99,12 +72,3 @@ def target_distribution(df: pd.DataFrame) -> pd.DataFrame:
             "%": (100 * counts / counts.sum()).round(2).values,
         }
     ).set_index("clase")
-
-
-def split_data(df: pd.DataFrame, test_size=cfg.TEST_SIZE, random_state=cfg.RANDOM_STATE):
-    """Partición estratificada train/test. Devuelve X_train, X_test, y_train, y_test."""
-    X = df.drop(columns=[cfg.TARGET])
-    y = df[cfg.TARGET]
-    return train_test_split(
-        X, y, test_size=test_size, stratify=y, random_state=random_state
-    )

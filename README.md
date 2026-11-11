@@ -7,7 +7,10 @@ Modelo predictivo para identificar los clientes con mayor probabilidad de retira
 
 - `bank_churn.xlsx`: datos originales (10.127 clientes, 2021; churn a cierre 2022).
 - `notebooks/churn_analysis.ipynb`: notebook principal (interacción, gráficos y conclusiones).
-- `src/`: funciones y clases de utilidad que usa el notebook.
+- `src/`: funciones y clases de utilidad que usa el notebook, organizadas por fase de CRISP-DM:
+  - `data_understanding/`: carga, calidad de datos y EDA.
+  - `data_preparation/`: partición, variables y pipelines.
+  - `modeling/`, `evaluation/`, `deployment/`: modelado, evaluación (incluye Montecarlo) y scoring.
 - `reports/figures/`: figuras exportadas para el documento y la presentación.
 - `models/`: modelos entrenados (no versionados).
 
