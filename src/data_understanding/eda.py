@@ -297,3 +297,17 @@ def mann_whitney_tests(df, cols=None, alpha=0.05):
         )
     out = pd.DataFrame(rows).set_index("variable")
     return out.reindex(out["efecto r"].abs().sort_values(ascending=False).index)
+
+
+def churn_rate_by_quantile(df, col, q=5):
+    """Tasa de churn por cuantiles de una variable numérica (por defecto quintiles).
+
+    Cada grupo tiene aproximadamente el mismo número de clientes; se muestra
+    el rango de valores, el número de clientes y la tasa de churn.
+    """
+    groups = pd.qcut(df[col], q=q, duplicates="drop")
+    table = df.groupby(groups, observed=True)[cfg.TARGET].agg(clientes="size", churn_pct="mean")
+    table["churn_pct"] = (100 * table["churn_pct"]).round(1)
+    table.index = [f"Q{i + 1}: {iv.left:,.1f} a {iv.right:,.1f}" for i, iv in enumerate(table.index)]
+    table.index.name = f"{col} (cuantiles)"
+    return table.rename(columns={"churn_pct": "churn %"})
