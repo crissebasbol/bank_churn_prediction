@@ -13,11 +13,7 @@ def load_raw(path=cfg.DATA_PATH) -> pd.DataFrame:
 
 
 def prepare_base(df: pd.DataFrame) -> pd.DataFrame:
-    """Tipado básico y creación del target binario (1 = churn).
-
-    No elimina ni imputa nada: las decisiones de preprocesamiento
-    se toman en `features.py` dentro de pipelines.
-    """
+    """Tipado básico y creación del target binario (1 = churn)."""
     out = df.copy()
     out[cfg.TARGET] = (out[cfg.TARGET_RAW] == cfg.POSITIVE_LABEL).astype(int)
     out = out.drop(columns=[cfg.TARGET_RAW])
