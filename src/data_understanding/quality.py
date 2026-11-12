@@ -62,6 +62,18 @@ def unknown_summary(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).set_index("variable")
 
 
+def categorical_frequencies(df: pd.DataFrame, col: str) -> pd.DataFrame:
+    """Frecuencia absoluta (n) y relativa (%) de una variable categórica."""
+    counts = df[col].value_counts()
+    if col in cfg.ORDINAL_ORDER:
+        order = [c for c in cfg.ORDINAL_ORDER[col] + [cfg.UNKNOWN] if c in counts.index]
+        counts = counts.reindex(order)
+    table = counts.to_frame("n")
+    table["%"] = (100 * table["n"] / table["n"].sum()).round(2)
+    table.index.name = col
+    return table
+
+
 def target_distribution(df: pd.DataFrame) -> pd.DataFrame:
     """Conteo y proporción de la variable objetivo."""
     counts = df[cfg.TARGET].value_counts().sort_index()
