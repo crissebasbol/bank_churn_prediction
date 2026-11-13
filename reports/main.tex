@@ -1,0 +1,738 @@
+% =====================================================================
+% Predicción de churn en un banco - Informe del caso de negocio
+% Métodos de Analítica II - Pontificia Universidad Javeriana - 2026-3
+%
+% Compilar con pdfLaTeX (Overleaf). Estructura esperada del proyecto:
+%   main.tex
+%   figures/   (carpeta reports/figures del repositorio, completa)
+% =====================================================================
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-tabla,es-noshorthands]{babel}
+\usepackage{lmodern}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{amsmath}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{multirow}
+\usepackage[hidelinks]{hyperref}
+
+% Busca las imágenes en figures/ o Figures/ (Overleaf distingue mayúsculas de minúsculas)
+\graphicspath{{figures/}{Figures/}}
+\setlist{itemsep=2pt, topsep=4pt}
+\captionsetup{font=small, labelfont=bf}
+
+% Nombres de variables del dataset (con guiones bajos) en fuente monoespaciada
+\newcommand{\var}[1]{\texttt{\detokenize{#1}}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\title{\textbf{Predicción de churn en un banco}\\[4pt]
+\large Modelo predictivo para priorizar la campaña de retención de clientes}
+\author{Métodos de Analítica II -- Proyecto Caso de Negocio\\
+Maestría en Analítica para la Inteligencia de Negocios\\
+Pontificia Universidad Javeriana\\[8pt]
+\textit{Integrantes: Alexandra Ardila Navarro, Cristhian Bolaños}}
+\date{Noviembre de 2026}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+\noindent El banco perdió el 15\% de sus clientes activos en el último trimestre y creó un programa de beneficios para retenerlos. Este informe presenta un modelo predictivo que identifica a los clientes con mayor probabilidad de irse y una estrategia para priorizar a quién ofrecer los beneficios. Siguiendo la metodología CRISP-DM, se analizaron 10.127 clientes y se compararon los modelos vistos en el curso: regresión logística entrenada por descenso de gradiente, máquinas de soporte vectorial, redes neuronales y ensambles. El modelo elegido, XGBoost, alcanza un PR-AUC de 0,968 y un ROC-AUC de 0,993 en clientes que no se usaron para entrenarlo. Una simulación Montecarlo muestra que la campaña es rentable cuando se prioriza por \emph{pérdida esperada} (probabilidad de churn por valor del cliente): contactar al 11\% de los clientes genera una ganancia media estimada de 49.811 USD (199,2 millones de COP) en tres años, con probabilidad de pérdida prácticamente nula.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% =====================================================================
+\section{Resumen ejecutivo}
+% =====================================================================
+
+\paragraph{Problema.} La entidad financiera registró una reducción del 15\% de sus clientes activos en el último trimestre; la información de centrales de riesgo indica que muchos se están yendo a otras entidades. Para retenerlos, el banco diseñó un programa de beneficios (eliminación de la cuota de manejo, mejores tasas en crédito de consumo, retiros ilimitados), pero necesita saber \textbf{qué clientes son más propensos a retirarse} para \textbf{priorizar} a quién ofrecerlos.
+
+\paragraph{Solución.} Se construyó un modelo de \textbf{XGBoost} que estima, con los datos que el banco ya tiene, la probabilidad de que cada cliente se vaya. En el conjunto de prueba (2.026 clientes que el modelo nunca vio):
+\begin{itemize}
+  \item Detecta \textbf{291 de los 325 clientes que se fueron} (Recall de 0,895) y solo marca por error a 19 de los 1.701 que se quedaron (Precision de 0,939).
+  \item El 10\% de clientes con mayor riesgo tiene una tasa de churn del \textbf{99,0\%}, seis veces la tasa promedio. Contactando al 20\% de mayor riesgo se alcanza el 96\% de los clientes que se van.
+\end{itemize}
+
+\paragraph{Hallazgo clave para el negocio.} No basta con saber quién se va. Los clientes que se van le dejan al banco, en promedio, menos valor que los que se quedan (238 frente a 401 USD al año), porque muchos no usan el crédito rotativo. Por eso se recomienda priorizar por \textbf{pérdida esperada} = probabilidad de churn $\times$ valor del cliente. Según una simulación Montecarlo de 10.000 escenarios:
+\begin{itemize}
+  \item Contactar al \textbf{11\% de los clientes con mayor pérdida esperada} genera una ganancia media de \textbf{49.811 USD (199,2 millones de COP)} en tres años, con 90\% de los escenarios entre 24.708 y 76.187 USD y probabilidad de pérdida del 0\%.
+  \item Ofrecer los beneficios al azar pierde dinero en cualquier escenario.
+\end{itemize}
+
+\paragraph{Qué hace que un cliente se vaya.} El cliente que se va \textbf{se desconecta antes de irse}: hace menos transacciones, mueve menos dinero, reduce su actividad entre trimestres, no usa el crédito rotativo, tiene pocos productos y contacta más al banco. El perfil demográfico casi no influye.
+
+\paragraph{Implementación.} El modelo se entrega como un pipeline completo que recibe los datos crudos de los clientes y devuelve la lista priorizada para la campaña, junto con una aplicación web local que indica, cliente por cliente, si vale la pena ofrecerle el beneficio y por qué.
+
+% =====================================================================
+\section{Descripción de la necesidad}
+% =====================================================================
+
+La pérdida de clientes (\emph{churn} o deserción) afecta directamente los ingresos del banco: cada cliente que se va deja de generar intereses, comisiones y la posibilidad de venderle otros productos, y conseguir un cliente nuevo suele ser más costoso que retener uno existente.
+
+El banco ya decidió \textbf{cómo} responder (un programa de beneficios), pero los beneficios tienen un costo y no tiene sentido ofrecérselos a toda la base: la mayoría de los clientes no tiene intención de irse. La necesidad concreta es:
+
+\begin{enumerate}
+  \item \textbf{Identificar} a los clientes con mayor probabilidad de retirarse, usando la información demográfica, económica y de actividad financiera que el banco registra.
+  \item \textbf{Priorizar} a quién ofrecer los beneficios, de forma que el costo de la campaña se justifique con el valor de los clientes retenidos.
+\end{enumerate}
+
+Por lo tanto, el objetivo analítico es construir un modelo que estime la probabilidad de churn de cada cliente y traducir esa probabilidad en una decisión de negocio: a quién contactar y a cuántos.
+
+% =====================================================================
+\section{Datos y exploración}
+% =====================================================================
+
+\subsection{Descripción de los datos}
+
+El banco entregó información de \textbf{10.127 clientes} durante 2021 y una variable que indica si cada cliente permaneció en el banco al cierre de 2022 (\var{attrition_flag}). Además del identificador (\var{clientnum}) y la variable objetivo, hay 19 variables que se agrupan así (el diccionario completo está en el Anexo~\ref{anx:diccionario}):
+
+\begin{itemize}
+  \item \textbf{Perfil demográfico:} edad, género, número de dependientes, nivel educativo y estado civil.
+  \item \textbf{Perfil económico:} categoría de ingresos y categoría de tarjeta.
+  \item \textbf{Relación con el banco:} antigüedad, número de productos, meses de inactividad y contactos en el último año.
+  \item \textbf{Actividad financiera:} cupo de crédito, balance rotativo, cupo disponible, utilización de la tarjeta, monto y cantidad de transacciones, y su cambio entre el cuarto y el primer trimestre.
+\end{itemize}
+
+Los montos están expresados en dólares (USD), como indican las categorías de ingreso (por ejemplo, ``\$60K - \$80K'') y la magnitud de los cupos. En la evaluación de negocio los resultados se reportan también en pesos colombianos con una tasa de cambio supuesta de 4.000 COP por USD.
+
+\subsection{Calidad de los datos}
+
+\begin{itemize}
+  \item La base no tiene valores nulos ni filas duplicadas, y \var{clientnum} es único (se usa solo como identificador, no como predictor).
+  \item Tres variables usan la categoría \textbf{``Unknown''} como dato faltante: nivel educativo (15,0\% de los clientes), categoría de ingresos (11,0\%) y estado civil (7,4\%). En total, el 30,1\% de los clientes tiene al menos un dato ``Unknown''.
+  \item La tasa de churn de los clientes con ``Unknown'' es muy parecida a la del resto (por ejemplo, 16,85\% frente a 15,93\% en nivel educativo), por lo que se conservaron como una categoría más en lugar de eliminar el 30\% de la base.
+  \item El 93,2\% de los clientes tiene tarjeta Blue; las tarjetas Gold (116 clientes) y Platinum (20) tienen muy pocos casos.
+\end{itemize}
+
+\subsection{Variable objetivo: desbalance de clases}
+
+Solo el \textbf{16,1\%} de los clientes hizo churn (1.627 frente a 8.500; Figura~\ref{fig:target}). Esto tiene una consecuencia importante: un modelo que prediga que ``nadie se va'' acertaría el 84\% de las veces y sería inútil. Por eso la exactitud (\emph{accuracy}) no sirve como métrica y se requieren técnicas para manejar el desbalance (Sección~\ref{sec:preparacion}).
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.5\textwidth]{01_target_distribution.png}
+  \caption{Distribución de la variable objetivo: 16,1\% de los clientes hizo churn.}
+  \label{fig:target}
+\end{figure}
+
+\subsection{Variables numéricas: el cliente que se va se desconecta}
+
+La Figura~\ref{fig:numericas} compara la distribución de cada variable numérica entre los clientes que se van y los que se quedan (cada clase normalizada por separado). La Tabla~\ref{tab:medianas} resume las diferencias más importantes.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{02_numeric_distributions.png}
+  \caption{Distribución de las variables numéricas por clase (azul: se queda; naranja: churn).}
+  \label{fig:numericas}
+\end{figure}
+
+\begin{table}[H]
+  \centering
+  \caption{Mediana de las variables con mayor diferencia entre clases.}
+  \label{tab:medianas}
+  \begin{tabular}{lrr}
+    \toprule
+    Variable & Se queda & Churn \\
+    \midrule
+    \var{total_trans_ct} (cantidad de transacciones) & 71 & 43 \\
+    \var{total_trans_amt} (monto de transacciones, USD) & 4.100 & 2.329 \\
+    \var{total_ct_chng_q4_q1} (cambio de transacciones Q4/Q1) & 0,721 & 0,531 \\
+    \var{total_revolving_bal} (balance rotativo, USD) & 1.364 & 0 \\
+    \var{total_relationship_count} (productos) & 4 & 3 \\
+    \var{months_inactive_12_mon} (meses inactivo) & 2 & 3 \\
+    \var{contacts_count_12_mon} (contactos con el banco) & 2 & 3 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Los principales hallazgos son:
+\begin{itemize}
+  \item \textbf{Actividad transaccional:} los clientes que se van hacen muchas menos transacciones y mueven menos dinero. Ninguno de los 747 clientes con más de 11.000 USD en transacciones hizo churn.
+  \item \textbf{Crédito rotativo:} el 54,9\% de los clientes que se van tiene balance rotativo en cero, frente al 18,6\% de los que se quedan.
+  \item \textbf{Relación con el banco:} con 1 o 2 productos la tasa de churn es del 25,6\% al 27,8\%; con 4 o más baja a cerca del 11\%. La tasa sube de 4,5\% (1 mes inactivo) a 29,9\% (4 meses inactivo).
+  \item \textbf{Contactos:} la tasa de churn crece con cada contacto, de 1,8\% (ningún contacto) a 33,5\% (5 contactos), y los 54 clientes con 6 contactos se fueron todos. Los contactos parecen reflejar reclamos o problemas.
+  \item \textbf{Sin diferencia:} edad, dependientes, antigüedad, cupo de crédito y cupo disponible se distribuyen igual en ambas clases.
+\end{itemize}
+
+\subsection{Variables categóricas: la demografía pesa poco}
+
+La Figura~\ref{fig:categoricas} muestra la tasa de churn de cada categoría frente a la tasa general. Las diferencias son pequeñas: las mujeres se van más que los hombres (17,4\% frente a 14,6\%), los ingresos tienen forma de ``U'' (los extremos están por encima del promedio) y los niveles educativos más altos se van algo más.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{03_categorical_churn_rate.png}
+  \caption{Tasa de churn por categoría. La línea punteada es la tasa general (16,1\%); $n$ es el número de clientes.}
+  \label{fig:categoricas}
+\end{figure}
+
+Para saber si estas diferencias son reales se aplicó la prueba \textbf{chi-cuadrado de independencia} (Tabla~\ref{tab:chi2}). Género e ingreso son significativos, pero la \textbf{V de Cramér}, que mide la fuerza de la relación, es menor a 0,04 en todas las variables: relaciones muy débiles. La tasa de 25\% de los clientes Platinum no se considera un hallazgo porque son solo 20 clientes y la prueba no es significativa.
+
+\begin{table}[H]
+  \centering
+  \caption{Prueba chi-cuadrado entre cada variable categórica y el churn.}
+  \label{tab:chi2}
+  \begin{tabular}{lrcr}
+    \toprule
+    Variable & p-valor & Significativa ($p<0{,}05$) & V de Cramér \\
+    \midrule
+    \var{gender} & 0,0002 & Sí & 0,037 \\
+    \var{income_category} & 0,0250 & Sí & 0,036 \\
+    \var{education_level} & 0,0515 & No & 0,035 \\
+    \var{marital_status} & 0,1089 & No & 0,024 \\
+    \var{card_category} & 0,5252 & No & 0,015 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Correlación y variables redundantes}
+
+La matriz de correlación de Spearman (Figura~\ref{fig:corr}) revela cuatro pares de variables muy correlacionadas. Al revisarlos se encontró que dos variables son \textbf{cálculos exactos} de otras en el 100\% de los clientes:
+\begin{itemize}
+  \item \var{avg_open_to_buy} = \var{credit_limit} $-$ \var{total_revolving_bal} (correlación de 0,931 con el cupo).
+  \item \var{avg_utilization_ratio} = \var{total_revolving_bal} / \var{credit_limit} (correlación de 0,709 con el balance).
+\end{itemize}
+Los otros dos pares son relaciones naturales: monto y cantidad de transacciones (0,880), y edad y antigüedad (0,769).
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{04_correlation_matrix.png}
+  \caption{Matriz de correlación de Spearman entre las variables numéricas y el churn.}
+  \label{fig:corr}
+\end{figure}
+
+\subsection{Prueba de Mann-Whitney}
+
+Para confirmar con rigor estadístico las diferencias de las variables numéricas se aplicó la prueba U de Mann-Whitney, que no asume normalidad. Como con más de 10.000 clientes casi todo resulta significativo, se usó el \textbf{tamaño del efecto} (correlación biserial de rangos, $r$) para medir qué tan útil es cada variable (Tabla~\ref{tab:mw}). El orden coincide con el de los histogramas y la correlación: tres métodos distintos llegan a la misma conclusión.
+
+\begin{table}[H]
+  \centering
+  \caption{Tamaño del efecto de Mann-Whitney (r $<$ 0: menor en los clientes que se van).}
+  \label{tab:mw}
+  \begin{tabular}{lrl}
+    \toprule
+    Variable & Efecto $r$ & Magnitud \\
+    \midrule
+    \var{total_trans_ct} & $-$0,591 & Grande \\
+    \var{total_ct_chng_q4_q1} & $-$0,491 & Mediano \\
+    \var{total_revolving_bal} & $-$0,375 & Mediano \\
+    \var{avg_utilization_ratio} & $-$0,375 & Mediano \\
+    \var{total_trans_amt} & $-$0,352 & Mediano \\
+    \var{contacts_count_12_mon} & 0,286 & Pequeño \\
+    \var{months_inactive_12_mon} & 0,256 & Pequeño \\
+    \var{total_relationship_count} & $-$0,231 & Pequeño \\
+    \var{customer_age}, \var{months_on_book}, \var{dependent_count}, \var{credit_limit} & $|r|<0{,}1$ & Despreciable \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Conclusiones del análisis exploratorio}
+
+\begin{enumerate}
+  \item El cliente que se va \textbf{ya venía desconectándose}: menos transacciones, caída de actividad entre trimestres, sin uso del crédito rotativo, pocos productos, más inactividad y más contactos. Son señales que el banco observa \emph{antes} del retiro.
+  \item El \textbf{comportamiento pesa mucho más que el perfil demográfico}.
+  \item Ninguna variable separa las clases por sí sola (correlación máxima con el churn de 0,376), lo que justifica usar modelos multivariados.
+\end{enumerate}
+
+% =====================================================================
+\section{Metodología analítica}
+% =====================================================================
+
+El proyecto siguió la metodología \textbf{CRISP-DM}: entendimiento del negocio, entendimiento de los datos, preparación, modelado, evaluación y despliegue. Todo el análisis está en un notebook de Python que se apoya en un paquete de funciones organizado por estas mismas fases (Anexo~\ref{anx:repositorio}).
+
+\subsection{Preparación de los datos}
+\label{sec:preparacion}
+
+\paragraph{Partición.} Antes de cualquier transformación se separó un \textbf{20\% de los clientes como conjunto de prueba} (test), de forma estratificada para conservar el 16,1\% de churn: 8.101 clientes de entrenamiento (1.302 churn) y 2.026 de prueba (325 churn). El test no se usó en ninguna decisión hasta la evaluación final.
+
+\paragraph{Variables.} Se eliminó \var{avg_open_to_buy} (cálculo exacto de otras dos) y se creó \var{avg_ticket} (monto promedio por transacción) como variable candidata. Las categorías ordinales (educación, ingreso, tarjeta) se codificaron según su orden natural, reemplazando ``Unknown'' por la mediana del entrenamiento y agregando un indicador; género y estado civil se codificaron con variables binarias (\emph{one-hot}). Las variables numéricas se estandarizaron (media 0, desviación 1), lo cual es indispensable para SVM, redes neuronales y descenso de gradiente. El resultado son 23 variables numéricas.
+
+\paragraph{Sin fuga de información.} Todo el preprocesamiento se implementó dentro de un \emph{pipeline}, que se ajusta solo con los datos de entrenamiento de cada partición y se aplica igual a validación, prueba y clientes nuevos.
+
+\paragraph{Desbalance de clases.} Se compararon tres estrategias con una regresión logística (Tabla~\ref{tab:desbalance}). Los pesos de clase y SMOTE suben mucho el Recall sin cambiar la capacidad de ordenamiento (ROC-AUC y PR-AUC casi iguales). Se eligieron los \textbf{pesos de clase} por ser más simples y no crear datos artificiales; SMOTE se usó en los modelos que no aceptan pesos (red neuronal, AdaBoost y Gradient Boosting) y XGBoost usa su parámetro equivalente (\var{scale_pos_weight}).
+
+\begin{table}[H]
+  \centering
+  \caption{Estrategias de desbalance (regresión logística, validación cruzada de 5 folds).}
+  \label{tab:desbalance}
+  \begin{tabular}{lcccc}
+    \toprule
+    Estrategia & Recall & Precision & ROC-AUC & PR-AUC \\
+    \midrule
+    Sin tratamiento & 0,620 & 0,788 & 0,934 & 0,784 \\
+    Pesos de clase & 0,865 & 0,547 & 0,935 & 0,772 \\
+    SMOTE & 0,843 & 0,561 & 0,932 & 0,763 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Métricas de evaluación}
+
+\begin{itemize}
+  \item \textbf{Recall:} de los clientes que se van, qué porcentaje detecta el modelo. Un churner no detectado es un cliente perdido sin intentar retenerlo.
+  \item \textbf{Precision:} de los clientes que el modelo marca, qué porcentaje se va de verdad. Una precisión baja significa gastar beneficios en clientes que no se iban a ir.
+  \item \textbf{F1:} equilibrio entre Recall y Precision.
+  \item \textbf{ROC-AUC:} probabilidad de que el modelo le asigne más riesgo a un cliente que se va que a uno que se queda, elegidos al azar.
+  \item \textbf{PR-AUC:} área bajo la curva Precision-Recall.
+\end{itemize}
+
+Recall, Precision y F1 dependen del umbral de decisión, mientras que ROC-AUC y PR-AUC miden qué tan bien el modelo \textbf{ordena} a los clientes por riesgo. Se eligió la \textbf{PR-AUC como métrica principal} porque:
+\begin{enumerate}
+  \item El banco usará el modelo para ordenar a sus clientes y contactar a los primeros de la lista.
+  \item Es exigente con el desbalance: un modelo al azar obtiene 0,161 (la proporción de churn), mientras que en ROC-AUC obtendría 0,5. Con 84\% de clientes que se quedan, la ROC-AUC es demasiado optimista: la regresión logística tiene ROC-AUC de 0,935 pero PR-AUC de 0,772.
+\end{enumerate}
+
+Los modelos se compararon con \textbf{validación cruzada estratificada de 5 folds} sobre el entrenamiento, usando la media y la desviación de cada métrica. El umbral de decisión se definió después, con criterios de negocio.
+
+\subsection{Modelos aplicados}
+
+\subsubsection{Optimización: regresión logística con descenso de gradiente}
+
+Entrenar un modelo es un problema de optimización: encontrar los coeficientes que minimizan una función de pérdida. Se entrenó una regresión logística con \textbf{descenso de gradiente estocástico} (\var{SGDClassifier} de scikit-learn), minimizando la entropía cruzada con regularización L2. La Figura~\ref{fig:sgd} muestra la convergencia y el efecto de la tasa de aprendizaje: con un paso muy pequeño (0,0001) el algoritmo no alcanza a converger en 50 épocas; con 0,001 converge de forma estable (pérdida de 0,321); con pasos grandes oscila (0,1) o diverge (1,0). En validación cruzada logra el mismo desempeño que la regresión logística estándar (PR-AUC de 0,767 frente a 0,772), lo esperado en un problema convexo. Es la \textbf{línea base} del estudio.
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}{0.49\textwidth}
+    \includegraphics[width=\textwidth]{05_sgd_convergence.png}
+    \caption{Convergencia con tasa 0,001.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}{0.49\textwidth}
+    \includegraphics[width=\textwidth]{06_sgd_learning_rate.png}
+    \caption{Efecto de la tasa de aprendizaje.}
+  \end{subfigure}
+  \caption{Descenso de gradiente: pérdida por época.}
+  \label{fig:sgd}
+\end{figure}
+
+\subsubsection{Máquinas de soporte vectorial (SVM)}
+
+Una SVM busca la frontera que separa las clases con el mayor margen. Se compararon los kernels lineal, RBF y polinomial: el lineal rinde igual que la regresión logística (PR-AUC de 0,768), mientras que el \textbf{RBF} mejora claramente (0,860), lo que confirma que la relación con el churn no es lineal. Se ajustaron sus hiperparámetros $C$ y $\gamma$ con búsqueda en grilla (Figura~\ref{fig:svm}): la mejor combinación ($C=10$, $\gamma=0{,}03$) llega a PR-AUC de 0,879. El mapa muestra sobreajuste con $\gamma=1$ y subajuste con valores muy pequeños de ambos parámetros. El problema es binario, por lo que no aplica la extensión de SVM a múltiples clases.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.6\textwidth]{07_svm_rbf_grid.png}
+  \caption{PR-AUC de la SVM RBF para cada combinación de $C$ y $\gamma$ (media de 5 folds).}
+  \label{fig:svm}
+\end{figure}
+
+\subsubsection{Redes neuronales}
+
+Se usó un perceptrón multicapa (red \emph{feed-forward} entrenada con \emph{backpropagation} y el optimizador Adam). Las arquitecturas probadas (una capa de 16, 32 o 64 neuronas; dos capas de 32-16 y 64-32) rindieron igual (PR-AUC entre 0,885 y 0,890): más neuronas no mejoran el modelo. Lo que sí mejoró fue la \textbf{regularización L2}: con $\alpha=0{,}1$ la PR-AUC sube a 0,910 (Figura~\ref{fig:mlp}). El \emph{early stopping} detuvo el entrenamiento en la época 89 (frente a 224) y empeoró el resultado (0,888), por lo que no se usó.
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}{0.42\textwidth}
+    \includegraphics[width=\textwidth]{08_mlp_alpha.png}
+    \caption{Efecto de la regularización L2.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}{0.56\textwidth}
+    \includegraphics[width=\textwidth]{09_mlp_training_curves.png}
+    \caption{Curvas de entrenamiento.}
+  \end{subfigure}
+  \caption{Red neuronal de una capa oculta de 64 neuronas.}
+  \label{fig:mlp}
+\end{figure}
+
+\subsubsection{Ensambles}
+
+Se evaluaron los cinco ensambles del curso, todos con 100 árboles: \textbf{Bagging} y \textbf{Random Forest} (árboles en paralelo que reducen la varianza) y \textbf{AdaBoost}, \textbf{Gradient Boosting} y \textbf{XGBoost} (árboles en secuencia que corrigen los errores de los anteriores). Con parámetros por defecto, todos superaron a los modelos anteriores, y XGBoost fue el mejor (PR-AUC de 0,966).
+
+Un hallazgo metodológico: AdaBoost con pesos de clase obtuvo PR-AUC de solo 0,618, porque esos pesos se multiplican sobre la reponderación que AdaBoost ya hace en cada iteración y el algoritmo se detiene antes de tiempo. Con SMOTE alcanza 0,916.
+
+Se ajustaron los hiperparámetros de los dos mejores. XGBoost alcanza su mejor resultado con árboles poco profundos (\var{max_depth} = 3), tasa de aprendizaje de 0,3 y 300 árboles; varias combinaciones cercanas dan resultados casi iguales, lo que indica un modelo robusto.
+
+\subsection{Comparación y selección del modelo}
+
+La Tabla~\ref{tab:comparacion} y la Figura~\ref{fig:comparacion} resumen todos los modelos. Los ensambles son los mejores porque aprenden de forma natural reglas con umbrales e interacciones (``pocas transacciones \emph{y} muchos contactos''), que es como se comporta el churn según el análisis exploratorio.
+
+\begin{table}[H]
+  \centering
+  \caption{Comparación de modelos (validación cruzada de 5 folds, umbral 0,5; media de los folds).}
+  \label{tab:comparacion}
+  \small
+  \begin{tabular}{llccccc}
+    \toprule
+    Familia & Modelo & Recall & Precision & F1 & ROC-AUC & PR-AUC \\
+    \midrule
+    \multirow{5}{*}{Ensambles} & \textbf{XGBoost ajustado} & \textbf{0,924} & \textbf{0,897} & \textbf{0,910} & \textbf{0,993} & \textbf{0,970} \\
+     & Random Forest ajustado & 0,906 & 0,889 & 0,897 & 0,990 & 0,953 \\
+     & Gradient Boosting & 0,909 & 0,850 & 0,878 & 0,988 & 0,946 \\
+     & Bagging & 0,822 & 0,903 & 0,860 & 0,987 & 0,934 \\
+     & AdaBoost & 0,899 & 0,764 & 0,826 & 0,978 & 0,916 \\
+    \midrule
+    Red neuronal & MLP (64), $\alpha=0{,}1$ & 0,866 & 0,787 & 0,825 & 0,977 & 0,910 \\
+    \midrule
+    \multirow{4}{*}{SVM} & RBF ajustado & 0,876 & 0,715 & 0,787 & 0,971 & 0,879 \\
+     & RBF & 0,896 & 0,693 & 0,781 & 0,970 & 0,860 \\
+     & Polinomial (grado 3) & 0,843 & 0,708 & 0,769 & 0,958 & 0,841 \\
+     & Lineal & 0,869 & 0,544 & 0,669 & 0,935 & 0,768 \\
+    \midrule
+    \multirow{2}{*}{Lineales} & Regresión logística & 0,865 & 0,547 & 0,670 & 0,935 & 0,772 \\
+     & Regresión logística (SGD) & 0,869 & 0,538 & 0,664 & 0,934 & 0,767 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{10_model_comparison.png}
+  \caption{PR-AUC de todos los modelos (media $\pm$ desviación de 5 folds), por familia.}
+  \label{fig:comparacion}
+\end{figure}
+
+\paragraph{Modelo elegido: XGBoost ajustado.} Tiene el mayor PR-AUC (0,970) y ROC-AUC (0,993), el mejor equilibrio entre Recall y Precision, la menor variación entre folds (desviación de 0,004 en PR-AUC) y entrena en fracciones de segundo, lo que facilita reentrenarlo periódicamente.
+
+% =====================================================================
+\section{Solución propuesta}
+% =====================================================================
+
+\subsection{Umbral de decisión}
+
+El modelo entrega una probabilidad; para marcar a un cliente como ``se va'' se necesita un umbral. Con las predicciones de validación cruzada del entrenamiento (sin usar el test) se analizó el compromiso entre Recall y Precision (Figura~\ref{fig:umbral}). El F1 es casi constante (entre 0,902 y 0,913) para umbrales entre 0,30 y 0,75, de modo que la elección exacta debe responder a criterios de negocio. Como referencia técnica se usó el umbral que maximiza el F1: \textbf{0,65}.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\textwidth]{11_threshold_curves.png}
+  \caption{Recall, Precision y F1 según el umbral de decisión.}
+  \label{fig:umbral}
+\end{figure}
+
+\subsection{Desempeño en clientes nuevos (conjunto de prueba)}
+
+El modelo se entrenó con todo el conjunto de entrenamiento y se evaluó una única vez en el test. Las métricas son prácticamente iguales a las de validación cruzada (Tabla~\ref{tab:test}), lo que confirma que el modelo \textbf{generaliza} y no está sobreajustado.
+
+\begin{table}[H]
+  \centering
+  \caption{Validación cruzada frente a prueba (umbral 0,65).}
+  \label{tab:test}
+  \begin{tabular}{lcc}
+    \toprule
+    Métrica & Validación cruzada & Prueba \\
+    \midrule
+    Recall & 0,902 & 0,895 \\
+    Precision & 0,924 & 0,939 \\
+    F1 & 0,913 & 0,917 \\
+    ROC-AUC & 0,993 & 0,993 \\
+    PR-AUC & 0,970 & 0,968 \\
+    Accuracy balanceada & 0,944 & 0,942 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}{0.36\textwidth}
+    \includegraphics[width=\textwidth]{12_confusion_matrix_test.png}
+    \caption{Matriz de confusión.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}{0.62\textwidth}
+    \includegraphics[width=\textwidth]{13_roc_pr_test.png}
+    \caption{Curvas ROC y Precision-Recall.}
+  \end{subfigure}
+  \caption{Evaluación en el conjunto de prueba (2.026 clientes).}
+  \label{fig:test}
+\end{figure}
+
+De los 325 clientes del test que se fueron, el modelo detecta 291 y se le escapan 34; solo marca por error a 19 de los 1.701 que se quedaron (Figura~\ref{fig:test}).
+
+\paragraph{Priorización por deciles.} Ordenando a los clientes del test de mayor a menor probabilidad (Tabla~\ref{tab:deciles} y Figura~\ref{fig:ganancia}): el 10\% de mayor riesgo tiene una tasa de churn del 99,0\%, seis veces la tasa promedio (\emph{lift} de 6,2), y contactando al 20\% de mayor riesgo se alcanza el 96\% de los clientes que se van. Del cuarto decil en adelante no hay ningún churner.
+
+\begin{table}[H]
+  \centering
+  \caption{Tabla de deciles en el conjunto de prueba.}
+  \label{tab:deciles}
+  \begin{tabular}{cccccc}
+    \toprule
+    Decil & Clientes & Churners & Tasa de churn & \% churners capturados (acum.) & Lift \\
+    \midrule
+    1 & 203 & 201 & 99,0\% & 61,8\% & 6,17 \\
+    2 & 203 & 111 & 54,7\% & 96,0\% & 3,41 \\
+    3 & 202 & 13 & 6,4\% & 100,0\% & 0,40 \\
+    4 a 10 & 1.418 & 0 & 0,0\% & 100,0\% & 0,00 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.6\textwidth]{14_gain_curve_test.png}
+  \caption{Curva de ganancia acumulada: porcentaje de churners capturados según el porcentaje de clientes contactados.}
+  \label{fig:ganancia}
+\end{figure}
+
+\subsection{Interpretación del modelo}
+
+La importancia de variables de XGBoost (Figura~\ref{fig:importancia}) muestra que el modelo se basa sobre todo en la \textbf{cantidad de transacciones} (\var{total_trans_ct}, 0,282), el \textbf{balance rotativo} (0,146), el \textbf{número de productos} (0,086) y el monto de transacciones, lo que coincide con el análisis exploratorio. Las variables demográficas tienen poco peso.
+
+Además se comparó el modelo con y sin las dos variables candidatas (\var{avg_ticket} y \var{avg_utilization_ratio}): la PR-AUC queda entre 0,969 y 0,970 en todas las versiones. Ninguna aporta información que el modelo no obtenga ya de las variables originales, por lo que se recomienda retirarlas en una próxima versión.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\textwidth]{15_xgb_feature_importance.png}
+  \caption{Importancia de variables en el modelo XGBoost (15 principales).}
+  \label{fig:importancia}
+\end{figure}
+
+\subsection{Impacto de negocio: simulación Montecarlo}
+
+Para decidir \textbf{a quién y a cuántos} contactar se comparó el costo de la campaña con el valor de los clientes retenidos. Como ambos son inciertos, se usó \textbf{simulación Montecarlo} con 10.000 escenarios sobre los clientes del test (Tabla~\ref{tab:supuestos}).
+
+\begin{table}[H]
+  \centering
+  \caption{Supuestos de la simulación (distribuciones triangulares: mínimo, más probable, máximo).}
+  \label{tab:supuestos}
+  \begin{tabularx}{\textwidth}{Ycc}
+    \toprule
+    Supuesto & Distribución & Valor medio \\
+    \midrule
+    Tasa de interés anual sobre el balance rotativo & (20\%, 25\%, 30\%) & 25\% \\
+    Comisión sobre el monto de transacciones & (1,5\%, 2\%, 2,5\%) & 2\% \\
+    Costo del beneficio por cliente contactado (USD) & (50, 80, 120) & 83 \\
+    Probabilidad de que un churner contactado se quede & (20\%, 35\%, 50\%) & 35\% \\
+    Años de valor de un cliente retenido & 3 (fijo) & 3 \\
+    Tasa de cambio (COP por USD) & 4.000 (fijo) & 4.000 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+El \textbf{valor anual} de cada cliente se estimó con sus propios datos: intereses sobre su balance rotativo más comisiones sobre sus transacciones. En cada escenario se sortean los supuestos, se determina qué clientes contactados se retienen y se calcula la \textbf{ganancia neta} = valor de los clientes retenidos $-$ costo de los beneficios entregados.
+
+Un primer resultado cambia la forma de plantear la campaña: \textbf{los clientes que se van valen menos} (valor anual medio de 238 USD y mediana de 145 USD, frente a 401 USD de los que se quedan), porque muchos no usan el crédito rotativo. Por eso se compararon dos formas de priorizar: \textbf{por probabilidad} de churn y \textbf{por pérdida esperada} (probabilidad $\times$ valor del cliente), además de contactar \textbf{al azar} como referencia (Tabla~\ref{tab:montecarlo} y Figura~\ref{fig:montecarlo}).
+
+\begin{table}[H]
+  \centering
+  \caption{Mejor resultado de cada estrategia (3 años de valor; 10.000 escenarios).}
+  \label{tab:montecarlo}
+  \small
+  \begin{tabular}{lcccccc}
+    \toprule
+    Estrategia & \% contactado & Clientes & Churners & Ganancia media (USD) & Percentil 5 a 95 (USD) & P(pérdida) \\
+    \midrule
+    \textbf{Por pérdida esperada} & \textbf{11\%} & 223 & 177 & \textbf{49.811} & 24.708 a 76.187 & 0,00\% \\
+    Por probabilidad & 17\% & 344 & 301 & 44.400 & 17.714 a 72.556 & 0,06\% \\
+    Al azar & \multicolumn{6}{c}{Pierde dinero con cualquier porcentaje de clientes contactados} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}{0.55\textwidth}
+    \includegraphics[width=\textwidth]{17_montecarlo_profit_curves.png}
+    \caption{Ganancia según el \% de clientes contactados.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}{0.43\textwidth}
+    \includegraphics[width=\textwidth]{18_montecarlo_distribution.png}
+    \caption{Distribución de la ganancia en el óptimo.}
+  \end{subfigure}
+  \caption{Simulación Montecarlo de la campaña de retención.}
+  \label{fig:montecarlo}
+\end{figure}
+
+\begin{itemize}
+  \item Priorizar por \textbf{pérdida esperada} es la mejor estrategia: contactando al 11\% de los clientes la ganancia media es de \textbf{49.811 USD (199,2 millones de COP)} y ningún escenario da pérdida. Entre el 10\% y el 15\% la ganancia es prácticamente igual, lo que da flexibilidad para ajustar la campaña al presupuesto.
+  \item Priorizar solo por probabilidad gana menos (44.400 USD) contactando a más clientes, muchos de ellos de bajo valor.
+  \item Contactar a más del 20\% de los clientes reduce la ganancia y aumenta el riesgo.
+  \item \textbf{Sensibilidad:} si un cliente retenido aporta solo un año de valor, solo la estrategia por pérdida esperada es rentable (8.806 USD contactando al 5\%), mientras que priorizar por probabilidad pierde dinero. Considerar el valor del cliente es lo que hace rentable la campaña.
+\end{itemize}
+
+\subsection{Implementación y forma de uso}
+
+\paragraph{Lista priorizada.} El modelo se entrega como un \emph{pipeline} completo: el banco le pasa los datos crudos de sus clientes (las mismas columnas del archivo original) y obtiene, para cada uno, su probabilidad de churn, su valor anual estimado, su pérdida esperada y si debe contactarse. Aplicado al test, la lista marca a 223 clientes (11\%), de los cuales 177 se fueron en la realidad.
+
+\paragraph{Aplicación web local.} Para el área comercial se construyó una aplicación con FastAPI (Figura~\ref{fig:app}) que, para un cliente, aplica la regla:
+\[
+\text{beneficio esperado} = p_{\text{churn}} \times 35\% \times \text{valor anual} \times 3 \text{ años} - 83 \text{ USD}
+\]
+Si es positivo recomienda ofrecer el beneficio, y en ambos casos explica por qué (por ejemplo, ``tiene alta probabilidad de irse, pero su valor no cubre el costo del beneficio''). Aplicada a todo el test, la regla recomienda contactar a 212 clientes (10,5\%), muy cerca del óptimo de la simulación.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.9\textwidth]{19_app_screenshot.png}
+  \caption{Aplicación local: un cliente con 100\% de probabilidad de churn pero bajo valor (35 USD al año), para el cual no vale la pena ofrecer el beneficio.}
+  \label{fig:app}
+\end{figure}
+
+\paragraph{Monitoreo y mantenimiento.}
+\begin{enumerate}
+  \item Registrar a quién se contactó, quién aceptó el beneficio y quién se fue, para medir la efectividad real de la campaña.
+  \item Mantener un \textbf{grupo de control} de clientes de alto riesgo sin contactar (prueba A/B) para medir cuánto churn evita realmente la campaña.
+  \item Revisar cada trimestre el desempeño del modelo (PR-AUC, Recall) frente al churn real y vigilar cambios en la distribución de las variables clave.
+  \item Reentrenar el modelo periódicamente (por ejemplo, cada seis meses) con datos recientes.
+\end{enumerate}
+
+\subsection{Recomendaciones de negocio}
+
+\begin{enumerate}
+  \item \textbf{Dirigir la campaña al 10\%--15\% de los clientes con mayor pérdida esperada}, no a toda la base ni solo a los de mayor probabilidad.
+  \item \textbf{Actuar sobre las señales tempranas}: caída en el número de transacciones, balance rotativo en cero, pocos productos, inactividad y aumento de contactos.
+  \item \textbf{Fortalecer la vinculación}: los clientes con más productos se van mucho menos, por lo que la venta cruzada es en sí misma una estrategia de retención.
+  \item \textbf{Atender los contactos}: si corresponden a reclamos, resolverlos a tiempo puede evitar la salida de clientes en riesgo.
+  \item \textbf{Personalizar el beneficio} según el perfil del cliente (mejores tasas para quien usa el crédito, retiros ilimitados para quien transa mucho).
+\end{enumerate}
+
+% =====================================================================
+\section{Conclusiones}
+% =====================================================================
+
+\begin{enumerate}
+  \item Es posible \textbf{predecir con alta precisión qué clientes se van a ir} con la información que el banco ya tiene: el modelo XGBoost obtiene una PR-AUC de 0,968 en clientes nuevos y concentra casi todo el churn en el 20\% de clientes de mayor riesgo.
+  \item El churn se explica por el \textbf{comportamiento} del cliente, no por su perfil demográfico: los clientes se desconectan del banco antes de irse, lo que abre una ventana para actuar.
+  \item Se aplicaron todos los temas del curso. Los ensambles de \emph{boosting} superaron a la red neuronal, a las SVM y a los modelos lineales, porque capturan las relaciones no lineales y las interacciones entre variables.
+  \item El valor del modelo para el negocio aparece al combinarlo con el \textbf{valor del cliente}: priorizar por pérdida esperada hace rentable la campaña aun con supuestos conservadores, mientras que ofrecer beneficios al azar pierde dinero.
+  \item Los resultados económicos dependen de supuestos que el banco debe validar, en especial la efectividad real del beneficio y la rentabilidad de cada cliente.
+\end{enumerate}
+
+\paragraph{Oportunidades de mejora.}
+\begin{itemize}
+  \item \textbf{Datos:} obtener la rentabilidad real por cliente; validar el pico de antigüedad en 36 meses (24,3\% de los clientes), posiblemente imputado; aclarar la definición de contactos e inactividad; reducir el 30\% de clientes con datos demográficos desconocidos; retirar las variables que son cálculos de otras.
+  \item \textbf{Modelo:} simplificarlo retirando \var{avg_ticket} y \var{avg_utilization_ratio}; reentrenarlo y monitorearlo periódicamente.
+  \item \textbf{Negocio:} medir la efectividad del beneficio con un grupo de control y personalizar la oferta por perfil de cliente.
+\end{itemize}
+
+% =====================================================================
+% Propuesta para la Junta Directiva (1 a 2 páginas, lenguaje no técnico)
+% =====================================================================
+\newpage
+\section{Propuesta para la Junta Directiva}
+\label{sec:junta}
+
+\paragraph{La situación.} En el último trimestre el banco perdió el 15\% de sus clientes activos. Ya existe un programa de beneficios para retenerlos, pero ofrecerlo a todos es costoso y la mayoría de los clientes no tiene intención de irse. La pregunta es: \textbf{¿a quién ofrecerle el beneficio para que la inversión se pague?}
+
+\paragraph{Lo que encontramos.}
+\begin{itemize}
+  \item \textbf{Podemos anticipar quién se va a ir.} De cada 10 clientes que se van, la herramienta identifica a 9 antes de que se vayan. Y de cada 10 clientes que señala, 9 efectivamente se iban a ir.
+  \item \textbf{Los clientes avisan antes de irse:} dejan de usar la tarjeta, hacen menos compras, tienen pocos productos con el banco y llaman más. Su edad, género o nivel de ingresos casi no influyen.
+  \item \textbf{No todos los clientes que se van valen lo mismo.} Muchos de los que se van le dejan muy poco al banco. Retenerlos puede costar más que lo que aportan.
+\end{itemize}
+
+\paragraph{Las opciones.} Se simularon 10.000 escenarios posibles de la campaña, con distintos niveles de aceptación del beneficio, costos e ingresos por cliente. Resultados proyectados a toda la base de clientes (aproximadamente 10.100), en un horizonte de 3 años:
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{3.3cm}Y>{\centering\arraybackslash}p{2.1cm}>{\centering\arraybackslash}p{2.5cm}>{\centering\arraybackslash}p{1.7cm}}
+    \toprule
+    Opción & Qué significa & Clientes a contactar & Ganancia esperada & Probabilidad de ganar \\
+    \midrule
+    A. Ofrecer el beneficio sin criterio (al azar) & Se reparte el beneficio entre clientes que en su mayoría no se iban a ir & Cualquier cantidad & Pérdida & 0\% \\
+    \addlinespace
+    B. Priorizar a los que tienen más riesgo de irse & Se contacta a quienes la herramienta ve más propensos a irse & $\approx$ 1.700 (17\%) & 222.000 USD (888 M COP) & 99,9\% \\
+    \addlinespace
+    \textbf{C. Priorizar a los clientes que más le cuesta perder al banco (recomendada)} & \textbf{Se combina el riesgo de irse con lo que aporta cada cliente} & \textbf{$\approx$ 1.100 (11\%)} & \textbf{249.000 USD (996 M COP)} & \textbf{100\%} \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\paragraph{Nuestra recomendación: opción C.}
+\begin{itemize}
+  \item Es la que \textbf{más gana con menos clientes}: contacta a cerca de 1 de cada 9 clientes y genera una ganancia esperada de unos \textbf{249.000 USD (cerca de 1.000 millones de COP)} en tres años.
+  \item Es la \textbf{más segura}: en el 90\% de los escenarios simulados la ganancia está entre \textbf{123.500 y 381.000 USD (494 a 1.523 millones de COP)}, y en ninguno de los 10.000 escenarios la campaña perdió dinero.
+  \item \textbf{Resiste un escenario pesimista}: aun si cada cliente retenido aportara solo un año de ingresos (en vez de tres), la opción C sigue ganando unos 44.000 USD (176 millones de COP), mientras que la opción B ya perdería dinero.
+  \item \textbf{Es flexible}: contactar entre el 10\% y el 15\% de los clientes da prácticamente la misma ganancia, así que la campaña se puede ajustar al presupuesto disponible.
+\end{itemize}
+
+\paragraph{Lo que solicitamos a la Junta.}
+\begin{enumerate}
+  \item \textbf{Aprobar una campaña piloto} con el 11\% de los clientes priorizados por la herramienta (cerca de 1.100 clientes).
+  \item \textbf{Reservar un pequeño grupo de control} de clientes en riesgo a quienes no se les ofrezca el beneficio, para medir con certeza cuántos clientes se logran retener.
+  \item \textbf{Revisar los resultados a los tres meses} y, si se confirman, extender la estrategia como un proceso mensual.
+  \item \textbf{Impulsar la vinculación}: los clientes con más productos se van mucho menos, por lo que ofrecer productos adicionales también es una forma de retener.
+\end{enumerate}
+
+\paragraph{Supuestos a tener en cuenta.} Las cifras son estimaciones. Asumen que alrededor de \textbf{1 de cada 3} clientes en riesgo acepta el beneficio y se queda, que el beneficio cuesta cerca de \textbf{80 USD} por cliente, y que el valor de cada cliente se puede estimar con sus intereses y comisiones. Por eso se propone empezar con un piloto: sus resultados permitirán reemplazar estos supuestos por cifras reales del banco.
+
+% =====================================================================
+\appendix
+\section{Anexos}
+% =====================================================================
+
+\subsection{Diccionario de variables}
+\label{anx:diccionario}
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{tabularx}{\textwidth}{lYl}
+    \toprule
+    Variable & Descripción & Tipo \\
+    \midrule
+    \var{clientnum} & Identificador único del cliente & Entero \\
+    \var{attrition_flag} & Variable objetivo: el cliente se fue (Attrited) o no (Existing) & Categórica \\
+    \var{customer_age} & Edad del cliente & Entero \\
+    \var{gender} & Sexo del cliente (F, M) & Categórica \\
+    \var{dependent_count} & Personas económicamente dependientes & Entero \\
+    \var{education_level} & Nivel educativo (incluye Unknown) & Ordinal \\
+    \var{marital_status} & Estado civil (incluye Unknown) & Categórica \\
+    \var{income_category} & Categoría de ingresos en USD (incluye Unknown) & Ordinal \\
+    \var{card_category} & Tarjeta: Blue, Silver, Gold, Platinum & Ordinal \\
+    \var{months_on_book} & Antigüedad del cliente (meses) & Entero \\
+    \var{total_relationship_count} & Total de productos con el banco & Entero \\
+    \var{months_inactive_12_mon} & Meses inactivo en el último año & Entero \\
+    \var{contacts_count_12_mon} & Contactos con el cliente en el último año & Entero \\
+    \var{credit_limit} & Cupo de crédito (USD) & Continua \\
+    \var{total_revolving_bal} & Balance de crédito rotativo (USD) & Entero \\
+    \var{avg_open_to_buy} & Cupo disponible (= cupo $-$ balance rotativo) & Continua \\
+    \var{total_amt_chng_q4_q1} & Cambio del monto de transacciones entre Q4 y Q1 & Continua \\
+    \var{total_trans_amt} & Monto total de transacciones (USD) & Entero \\
+    \var{total_trans_ct} & Cantidad de transacciones & Entero \\
+    \var{total_ct_chng_q4_q1} & Cambio de la cantidad de transacciones entre Q4 y Q1 & Continua \\
+    \var{avg_utilization_ratio} & Utilización de la tarjeta (= balance / cupo) & Continua \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Hiperparámetros evaluados}
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{tabularx}{\textwidth}{lYl}
+    \toprule
+    Modelo & Valores probados & Mejor \\
+    \midrule
+    Descenso de gradiente (SGD) & Tasa de aprendizaje: 0,0001; 0,001; 0,01; 0,1; 1,0 & 0,001 \\
+    SVM RBF & $C$: 0,1; 1; 10; 100; 1.000 -- $\gamma$: 0,001; 0,003; 0,01; 0,03; 0,1; 1 & $C=10$, $\gamma=0{,}03$ \\
+    Red neuronal & Capas: (16), (32), (64), (32, 16), (64, 32) -- $\alpha$: 0,0001 a 10 -- early stopping & (64), $\alpha=0{,}1$, sin early stopping \\
+    XGBoost & Tasa: 0,05; 0,1; 0,3; 0,5 -- profundidad: 2 a 5 -- árboles: 100; 300; 500 & 0,3; 3; 300 \\
+    Random Forest & Profundidad: sin límite, 10, 20 -- hojas mín.: 1, 3, 5 -- variables por corte: raíz, 50\% & Sin límite; 1; raíz \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+En las búsquedas en grilla de SVM y XGBoost, cuando el mejor valor quedó en el borde de la grilla, esta se amplió hasta que el óptimo quedó en su interior.
+
+\subsection{Repositorio y reproducibilidad}
+\label{anx:repositorio}
+
+El análisis completo está en un repositorio de Python organizado por las fases de CRISP-DM:
+
+\begin{itemize}
+  \item \var{notebooks/churn_analysis.ipynb}: notebook de soporte con todo el análisis, gráficos y conclusiones.
+  \item \var{src/data_understanding/}: carga, calidad de datos y análisis exploratorio.
+  \item \var{src/data_preparation/}: partición, ingeniería de variables, codificación y desbalance.
+  \item \var{src/modeling/}: modelos del curso, validación cruzada y búsqueda de hiperparámetros.
+  \item \var{src/evaluation/}: métricas, gráficos, interpretación y simulación Montecarlo.
+  \item \var{src/deployment/}: puntuación de clientes, regla de decisión y aplicación web (FastAPI).
+\end{itemize}
+
+Se usó una semilla fija (42) para que todos los resultados sean reproducibles. La aplicación se ejecuta con \var{uvicorn src.deployment.api:app} y se consulta en \var{http://localhost:8000}.
+
+\end{document}
