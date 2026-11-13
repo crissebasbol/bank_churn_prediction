@@ -217,3 +217,8 @@ RF_GRID = {
     "model__min_samples_leaf": [1, 3, 5],
     "model__max_features": ["sqrt", 0.5],
 }
+
+
+# Hiperparámetros del modelo final (resultado de GridSearchCV en la sección 4.4).
+# Se usan para reentrenar el modelo fuera del notebook (src/deployment/train_model.py).
+XGB_BEST_PARAMS = {"learning_rate": 0.3, "max_depth": 3, "n_estimators": 300}

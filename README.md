@@ -22,3 +22,15 @@ source .venv/bin/activate
 pip install -r requirements.txt
 jupyter notebook notebooks/churn_analysis.ipynb
 ```
+
+## App local de predicción (FastAPI)
+
+Interfaz web para predecir el churn de un cliente y saber si vale la pena ofrecerle el beneficio de retención, con ejemplos precargados.
+
+```bash
+python -m src.deployment.train_model        # entrena y guarda el modelo (si no se ejecutó el notebook)
+uvicorn src.deployment.api:app --reload
+```
+
+- Interfaz: http://localhost:8000
+- Documentación de la API: http://localhost:8000/docs

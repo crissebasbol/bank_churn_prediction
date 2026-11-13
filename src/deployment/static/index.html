@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Predicción de churn</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1f2933; --muted: #616e7c; --border: #d9dee4;
+    --accent: #2f6db5; --good: #1e7b4f; --good-bg: #e3f4ea; --bad: #b5472f; --bad-bg: #fbe9e4;
+    --neutral-bg: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15191e; --card: #1e242b; --text: #e6e9ed; --muted: #9aa5b1; --border: #333c46;
+      --accent: #6aa3e6; --good: #6cd19b; --good-bg: #1d3328; --bad: #f08c72; --bad-bg: #3a2420;
+      --neutral-bg: #262d35;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 20px 24px 8px; max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  header p { margin: 0; color: var(--muted); }
+  main { max-width: 1200px; margin: 0 auto; padding: 16px 24px 40px; display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 16px; } }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+  h2 { font-size: 1.05rem; margin: 0 0 12px; }
+  .examples { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .example { text-align: left; border: 1px solid var(--border); background: var(--neutral-bg); color: var(--text);
+             border-radius: 8px; padding: 10px; cursor: pointer; font: inherit; }
+  .example:hover { border-color: var(--accent); }
+  .example strong { display: block; margin-bottom: 4px; }
+  .example span { font-size: 0.85rem; color: var(--muted); }
+  form { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 14px; }
+  label { display: flex; flex-direction: column; font-size: 0.85rem; color: var(--muted); gap: 4px; }
+  input, select { font: inherit; padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px;
+                  background: var(--card); color: var(--text); }
+  .actions { grid-column: 1 / -1; display: flex; gap: 10px; margin-top: 6px; }
+  button.primary { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 9px 18px; font: inherit; cursor: pointer; }
+  .result { display: none; }
+  .verdict { border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+  .verdict.good { background: var(--good-bg); color: var(--good); }
+  .verdict.bad { background: var(--bad-bg); color: var(--bad); }
+  .verdict strong { font-size: 1.2rem; display: block; margin-bottom: 6px; }
+  .verdict p { margin: 0; color: var(--text); }
+  .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .metric { background: var(--neutral-bg); border-radius: 8px; padding: 10px; }
+  .metric span { display: block; font-size: 0.8rem; color: var(--muted); }
+  .metric b { font-size: 1.15rem; }
+  .reality { margin-top: 12px; font-size: 0.9rem; color: var(--muted); }
+  .error { color: var(--bad); }
+  .note { font-size: 0.8rem; color: var(--muted); margin-top: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Predicción de churn y recomendación de retención</h1>
+  <p>Ingresa los datos de un cliente o elige un ejemplo para saber si vale la pena ofrecerle el beneficio.</p>
+</header>
+<main>
+  <section class="card">
+    <h2>Ejemplos precargados (clientes reales del test)</h2>
+    <div class="examples" id="examples"></div>
+    <h2>Datos del cliente</h2>
+    <form id="form">
+      <label>Género<select name="gender"><option>F</option><option>M</option></select></label>
+      <label>Edad<input name="customer_age" type="number" value="45"></label>
+      <label>Dependientes<input name="dependent_count" type="number" value="2"></label>
+      <label>Nivel educativo<select name="education_level">
+        <option>Uneducated</option><option>High School</option><option>College</option><option selected>Graduate</option>
+        <option>Post-Graduate</option><option>Doctorate</option><option>Unknown</option></select></label>
+      <label>Estado civil<select name="marital_status">
+        <option selected>Married</option><option>Single</option><option>Divorced</option><option>Unknown</option></select></label>
+      <label>Ingresos<select name="income_category">
+        <option selected>Less than $40K</option><option>$40K - $60K</option><option>$60K - $80K</option>
+        <option>$80K - $120K</option><option>$120K +</option><option>Unknown</option></select></label>
+      <label>Tarjeta<select name="card_category">
+        <option selected>Blue</option><option>Silver</option><option>Gold</option><option>Platinum</option></select></label>
+      <label>Antigüedad (meses)<input name="months_on_book" type="number" value="36"></label>
+      <label>Productos con el banco<input name="total_relationship_count" type="number" value="4"></label>
+      <label>Meses inactivo (12 m)<input name="months_inactive_12_mon" type="number" value="2"></label>
+      <label>Contactos (12 m)<input name="contacts_count_12_mon" type="number" value="2"></label>
+      <label>Cupo de crédito (USD)<input name="credit_limit" type="number" step="any" value="4500"></label>
+      <label>Balance rotativo (USD)<input name="total_revolving_bal" type="number" step="any" value="1200"></label>
+      <label>Monto de transacciones (USD)<input name="total_trans_amt" type="number" step="any" value="4000"></label>
+      <label>Cantidad de transacciones<input name="total_trans_ct" type="number" value="65"></label>
+      <label>Cambio monto Q4/Q1<input name="total_amt_chng_q4_q1" type="number" step="any" value="0.75"></label>
+      <label>Cambio cantidad Q4/Q1<input name="total_ct_chng_q4_q1" type="number" step="any" value="0.7"></label>
+      <div class="actions"><button class="primary" type="submit">Predecir</button></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Resultado</h2>
+    <p id="placeholder" class="note">Elige un ejemplo o completa el formulario y presiona "Predecir".</p>
+    <div id="result" class="result">
+      <div id="verdict" class="verdict"><strong id="verdict-title"></strong><p id="verdict-text"></p></div>
+      <div class="metrics">
+        <div class="metric"><span>Probabilidad de churn</span><b id="m-prob"></b></div>
+        <div class="metric"><span>Valor anual estimado</span><b id="m-value"></b></div>
+        <div class="metric"><span>Recuperación esperada (3 años)</span><b id="m-rec"></b></div>
+        <div class="metric"><span>Costo del beneficio</span><b id="m-cost"></b></div>
+        <div class="metric"><span>Pérdida esperada si se va (3 años)</span><b id="m-loss"></b></div>
+        <div class="metric"><span>Beneficio esperado de contactarlo</span><b id="m-net"></b></div>
+      </div>
+      <p id="reality" class="reality"></p>
+    </div>
+    <p id="error" class="error"></p>
+    <p class="note">Valor anual = balance rotativo x 25% + monto de transacciones x 2%. Beneficio esperado =
+      probabilidad x 35% de efectividad x valor anual x 3 años - costo medio del beneficio. Supuestos de la sección 5.4 del notebook.</p>
+  </section>
+</main>
+<script>
+  const form = document.getElementById("form");
+  const usd = v => v.toLocaleString("es-CO", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+  let currentReality = null;
+
+  async function predict() {
+    const data = Object.fromEntries(new FormData(form).entries());
+    for (const [k, v] of Object.entries(data)) {
+      if (form.elements[k].type === "number") data[k] = Number(v);
+    }
+    document.getElementById("error").textContent = "";
+    const res = await fetch("/predict", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    const body = await res.json();
+    if (!res.ok) {
+      document.getElementById("error").textContent = typeof body.detail === "string" ? body.detail : "Revisa los datos ingresados.";
+      return;
+    }
+    show(body);
+  }
+
+  function show(r) {
+    document.getElementById("placeholder").style.display = "none";
+    document.getElementById("result").style.display = "block";
+    const verdict = document.getElementById("verdict");
+    verdict.className = "verdict " + (r.vale_la_pena_retener ? "good" : "bad");
+    document.getElementById("verdict-title").textContent = r.vale_la_pena_retener ? "Vale la pena retenerlo" : "No vale la pena ofrecerle el beneficio";
+    document.getElementById("verdict-text").textContent = r.explicacion;
+    document.getElementById("m-prob").textContent = (100 * r.prob_churn).toFixed(1) + "%" + (r.modelo_predice_churn ? " (churn)" : "");
+    document.getElementById("m-value").textContent = usd(r.valor_anual_usd);
+    document.getElementById("m-rec").textContent = usd(r.recuperacion_esperada_usd);
+    document.getElementById("m-cost").textContent = usd(r.costo_beneficio_usd);
+    document.getElementById("m-loss").textContent = usd(r.perdida_esperada_usd);
+    document.getElementById("m-net").textContent = usd(r.beneficio_esperado_usd);
+    document.getElementById("reality").textContent = currentReality ? "En la realidad este cliente: " + currentReality + "." : "";
+  }
+
+  async function loadExamples() {
+    const res = await fetch("/examples");
+    const examples = await res.json();
+    const box = document.getElementById("examples");
+    for (const ex of examples) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "example";
+      btn.innerHTML = `<strong>${ex.nombre}</strong><span>${ex.descripcion}</span>`;
+      btn.onclick = () => {
+        for (const [k, v] of Object.entries(ex.datos)) if (form.elements[k]) form.elements[k].value = v;
+        currentReality = ex.realidad;
+        predict();
+      };
+      box.appendChild(btn);
+    }
+  }
+
+  form.addEventListener("input", () => { currentReality = null; });
+  form.addEventListener("submit", e => { e.preventDefault(); predict(); });
+  loadExamples();
+</script>
+</body>
+</html>
