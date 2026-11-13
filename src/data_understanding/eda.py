@@ -177,7 +177,8 @@ def chi2_tests(df, cols=None, alpha=0.05):
                 "variable": col,
                 "chi2": round(chi2, 2),
                 "gl": dof,
-                "p-valor": round(p, 4),
+                # como texto con 4 decimales, para que no se redondee a 0 en el notebook
+                "p-valor": f"{p:.4f}",
                 f"significativa (p<{alpha})": "Sí" if p < alpha else "No",
                 "V de Cramér": round(cramers_v, 3),
                 "min. esperado": round(expected.min(), 1),

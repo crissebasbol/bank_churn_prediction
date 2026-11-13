@@ -8,7 +8,7 @@ from src import config as cfg
 from src.data_preparation.features import build_preprocessor
 
 
-def make_pipeline(model, strategy="none", add_avg_ticket=True):
+def make_pipeline(model, strategy="none", add_avg_ticket=True, drop_cols=("avg_open_to_buy",)):
     """Pipeline preprocesamiento + (SMOTE) + modelo según la estrategia.
 
     - "none": el modelo tal cual.
@@ -16,7 +16,8 @@ def make_pipeline(model, strategy="none", add_avg_ticket=True):
       equivocarse con un churner pesa ~5 veces más que con un cliente que se queda.
     - "smote": SMOTE genera churners sintéticos hasta igualar las clases.
     """
-    steps = list(build_preprocessor(add_avg_ticket=add_avg_ticket).steps)
+    # drop_cols: variables que se eliminan antes de modelar (por defecto avg_open_to_buy)
+    steps = list(build_preprocessor(add_avg_ticket=add_avg_ticket, drop_cols=drop_cols).steps)
     if strategy == "smote":
         steps.append(("smote", SMOTE(random_state=cfg.RANDOM_STATE)))
     elif strategy == "class_weight":
